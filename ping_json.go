@@ -12,10 +12,10 @@ type Ping struct {
 type Pings map[string]Ping
 
 type Pong struct {
-	Diffs  []string `json:"diffs"`
-	Mean   float64  `json:"mean"`
-	Median float64  `json:"median"`
-	GMean  float64  `json:"gmean"`
+	Diffs  map[string]string `json:"diffs"`
+	Mean   float64           `json:"mean"`
+	Median float64           `json:"median"`
+	GMean  float64           `json:"gmean"`
 }
 
 type Data struct {

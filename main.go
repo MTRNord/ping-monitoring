@@ -33,11 +33,42 @@ func main() {
 		config.RemoteHomeservers[i].Client = createMatrixClient(&config, &config.RemoteHomeservers[i])
 	}
 
+	pingCollector := &PingCollector{
+		Config: &config,
+		Mean: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: collector,
+			Name:      "mean",
+			Help:      "Mean ping time",
+		}, []string{"homeserver", "origin", "direction"}),
+		Median: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: collector,
+			Name:      "median",
+			Help:      "Median ping time",
+		}, []string{"homeserver", "origin", "direction"}),
+		GMean: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: collector,
+			Name:      "gmean",
+			Help:      "GMean ping time",
+		}, []string{"homeserver", "origin", "direction"}),
+		Failures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: collector,
+			Name:      "failures",
+			Help:      "Ping failures",
+		}, []string{"origin", "direction"}),
+	}
+
+	go func() {
+		pingCollector.UpdateData()
+		time.Sleep(time.Duration(config.PingRateSeconds+1) * time.Second)
+		for {
+			pingCollector.UpdateData()
+			time.Sleep(time.Duration(config.PingRateSeconds+1) * time.Second)
+		}
+	}()
+
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(version.NewCollector(collector))
-	reg.MustRegister(&PingCollector{
-		Config: &config,
-	})
+	reg.MustRegister(pingCollector)
 
 	http.Handle("/metrics", promhttp.HandlerFor(
 		reg,
