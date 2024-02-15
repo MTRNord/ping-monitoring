@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -12,7 +14,7 @@ import (
 )
 
 type PingCollector struct {
-	Config        Config
+	Config        *Config
 	Metrics       map[string]*prometheus.Desc
 	LastCollected time.Time
 	Failures      map[string]int
@@ -40,16 +42,34 @@ func (c *PingCollector) Describe(ch chan<- *prometheus.Desc) {
 // We also do react on our own `!ping` message and send a `!pong` back to the ping room based on the maubot echobot logic.
 func (c *PingCollector) Collect(ch chan<- prometheus.Metric) {
 	log.Infoln("Starting Collecting metrics")
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Send ping from our own homeserver
+	go c.SendPing(context.Background(), c.Config.OwnHomeserver.Client, ch, &wg)
+
+	// Send ping from all remote homeservers
+	for _, homeserver := range c.Config.RemoteHomeservers {
+		wg.Add(1)
+		go c.SendPing(context.Background(), homeserver.Client, ch, &wg)
+	}
+
+	wg.Wait()
 }
 
 // This sends a ping into the ping room
 // It takes a homeserver config as an argument to know where to send the ping
-func (c *PingCollector) SendPing(ctx context.Context, client mautrix.Client, ch chan<- prometheus.Metric) {
+func (c *PingCollector) SendPing(ctx context.Context, client *mautrix.Client, ch chan<- prometheus.Metric, wg *sync.WaitGroup) {
+	defer wg.Done()
 	if c.LastCollected.Add(time.Duration(c.Config.PingRateSeconds) * time.Second).After(time.Now()) {
 		log.Infof("Not sending ping as we sent one less than %d seconds ago", c.Config.PingRateSeconds)
 		return
 	}
 	log.Infof("Sending ping as %s", client.UserID)
+	if c.Config.PingRoomID == "" {
+		log.Errorf("No ping room ID found")
+		return
+	}
 
 	// Send the ping
 	resp, err := client.SendText(ctx, c.Config.PingRoomID, "!ping")
@@ -92,13 +112,27 @@ outer:
 					break outer
 				}
 			}
+		} else {
+			log.Warnf("No pong for ping as %s", client.UserID)
 		}
+
+		// Sleep for 1 second
+		time.Sleep(1 * time.Second)
 	}
 
 	// If we have not received a pong for this ping, we should log it
 	if !gotKnownPong {
 		log.Errorf("Failed to get pong for ping as %s", client.UserID)
-		if client.HomeserverURL.Host == c.Config.OwnHomeserver.Homeserver {
+		if c.Failures == nil {
+			c.Failures = make(map[string]int)
+		}
+		u, err := url.Parse(c.Config.OwnHomeserver.Homeserver)
+		if err != nil {
+			log.Errorf("Failed to parse homeserver url: %s", err)
+			return
+		}
+
+		if client.HomeserverURL.Host == u.Host {
 			c.Failures["outgoing"]++
 			ch <- prometheus.MustNewConstMetric(c.Metrics["failures"], prometheus.CounterValue, float64(c.Failures["outgoing"]), client.HomeserverURL.Host, "outgoing")
 		} else {

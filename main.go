@@ -28,22 +28,21 @@ func main() {
 	flag.Parse()
 
 	// Create a matrix client for each homeserver
-	config.OwnHomeserver.Client = createMatrixClient(config, config.OwnHomeserver)
+	config.OwnHomeserver.Client = createMatrixClient(&config, &config.OwnHomeserver)
 	for i := range config.RemoteHomeservers {
-		config.RemoteHomeservers[i].Client = createMatrixClient(config, config.RemoteHomeservers[i])
+		config.RemoteHomeservers[i].Client = createMatrixClient(&config, &config.RemoteHomeservers[i])
 	}
 
-	prometheus.Register(version.NewCollector(collector))
-	prometheus.Register(&PingCollector{
-		Config: config,
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(version.NewCollector(collector))
+	reg.MustRegister(&PingCollector{
+		Config: &config,
 	})
 
-	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		h := promhttp.HandlerFor(prometheus.Gatherers{
-			prometheus.DefaultGatherer,
-		}, promhttp.HandlerOpts{})
-		h.ServeHTTP(w, r)
-	})
+	http.Handle("/metrics", promhttp.HandlerFor(
+		reg,
+		promhttp.HandlerOpts{},
+	))
 
 	log.Infof("Starting http server - %s", address)
 	if err := http.ListenAndServe(address, nil); err != nil {
@@ -62,38 +61,42 @@ type PongEventContent struct {
 	RelatesTo PongEventRelation `json:"m.relates_to"`
 }
 
-func createMatrixClient(Config Config, Homeserver MatrixConfig) *mautrix.Client {
+func createMatrixClient(config *Config, homeserver *MatrixConfig) *mautrix.Client {
 	var startTime = time.Now()
 
-	client, err := mautrix.NewClient(Homeserver.Homeserver, id.UserID(Homeserver.Username), "")
+	client, err := mautrix.NewClient(homeserver.Homeserver, id.UserID(homeserver.Username), "")
 	if err != nil {
-		log.Errorf("Failed to create client for %s: %s", Homeserver.Homeserver, err)
+		log.Errorf("Failed to create client for %s: %s", homeserver.Homeserver, err)
 		os.Exit(1)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err = client.Login(ctx, &mautrix.ReqLogin{
-		Type:       mautrix.AuthTypePassword,
-		Identifier: mautrix.UserIdentifier{Type: "m.id.user", User: Homeserver.Username},
-		Password:   Homeserver.Password,
+	loginresp, err := client.Login(ctx, &mautrix.ReqLogin{
+		Type:               mautrix.AuthTypePassword,
+		Identifier:         mautrix.UserIdentifier{Type: "m.id.user", User: homeserver.Username},
+		Password:           homeserver.Password,
+		StoreCredentials:   true,
+		StoreHomeserverURL: true,
 	})
 	if err != nil {
-		log.Errorf("Failed to login to %s: %s", Homeserver.Homeserver, err)
+		log.Errorf("Failed to login to %s: %s", homeserver.Homeserver, err)
 		os.Exit(1)
 	}
+	log.Infof("Logged in as %s", loginresp.UserID)
 
 	// join the ping room
-	resp, err := client.JoinRoom(ctx, Config.PingRoom, "", nil)
+	resp, err := client.JoinRoom(ctx, config.PingRoom, "", nil)
 	if err != nil {
 		log.Errorf("Failed to join ping room: %s", err)
 		os.Exit(1)
 	}
-	Config.PingRoomID = resp.RoomID
+	log.Infof("Joined ping room %s", resp.RoomID)
+	config.PingRoomID = resp.RoomID
 
 	syncer := client.Syncer.(*mautrix.DefaultSyncer)
 	syncer.OnEventType(event.EventMessage, func(ctx context.Context, evt *event.Event) {
-		if evt.RoomID != Config.PingRoomID {
+		if evt.RoomID != config.PingRoomID {
 			return
 		}
 		if evt.Sender == client.UserID {
@@ -105,6 +108,7 @@ func createMatrixClient(Config Config, Homeserver MatrixConfig) *mautrix.Client 
 		}
 
 		if evt.Content.AsMessage().Body == "!ping" {
+			log.Infoln("Received ping message in pingroom by ", evt.Sender)
 			// Respond to the ping
 			pong_event_content := PongEventContent{
 				MsgType: "m.notice",
@@ -121,11 +125,8 @@ func createMatrixClient(Config Config, Homeserver MatrixConfig) *mautrix.Client 
 		}
 	})
 
-	syncCtx, cancelSync := context.WithCancel(context.Background())
-	defer cancelSync()
-
 	go func() {
-		err = client.SyncWithContext(syncCtx)
+		err = client.Sync()
 		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Errorf("Failed to sync: %s", err)
 			os.Exit(1)

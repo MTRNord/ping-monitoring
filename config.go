@@ -112,13 +112,13 @@ func ReadConfig() Config {
 	}
 
 	// Ensure that the Remote Homeservers are different from the Own Homeserver or each other
-	for _, remoteHomeserver := range config.RemoteHomeservers {
+	for i, remoteHomeserver := range config.RemoteHomeservers {
 		if remoteHomeserver.Homeserver == config.OwnHomeserver.Homeserver {
 			log.Errorf("Remote homeserver %s is the same as the own homeserver", remoteHomeserver.Homeserver)
 			os.Exit(1)
 		}
-		for _, remoteHomeserver2 := range config.RemoteHomeservers {
-			if remoteHomeserver.Homeserver == remoteHomeserver2.Homeserver {
+		for j, remoteHomeserver2 := range config.RemoteHomeservers {
+			if remoteHomeserver.Homeserver == remoteHomeserver2.Homeserver && i != j {
 				log.Errorf("Remote homeserver %s is the same as remote homeserver %s", remoteHomeserver.Homeserver, remoteHomeserver2.Homeserver)
 				os.Exit(1)
 			}
