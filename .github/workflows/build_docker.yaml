@@ -68,7 +68,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          outputs: type=image,name=${{ steps.repo_slug.outputs.result }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ steps.meta.outputs.tags }},push-by-digest=true,name-canonical=true,push=true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.platform }}
