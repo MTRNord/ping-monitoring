@@ -66,6 +66,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
           build-args: |
             VERSION=${{ steps.git_info.outputs.VERSION }}
             BRANCH=${{ steps.git_info.outputs.BRANCH }}
