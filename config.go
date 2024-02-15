@@ -10,10 +10,12 @@ import (
 )
 
 type MatrixConfig struct {
-	Homeserver string `yaml:"homeserver"`
-	Username   string `yaml:"username"`
-	Password   string `yaml:"password"`
-	Client     *mautrix.Client
+	Homeserver  string `yaml:"homeserver"`
+	Username    string `yaml:"username"`
+	Password    string `yaml:"password,omitempty"`
+	DeviceID    string `yaml:"device_id,omitempty"`
+	AccessToken string `yaml:"access_token,omitempty"`
+	Client      *mautrix.Client
 }
 
 type Config struct {
@@ -74,8 +76,8 @@ func ReadConfig() Config {
 		log.Errorln("No own homeserver username defined")
 		os.Exit(1)
 	}
-	if config.OwnHomeserver.Password == "" {
-		log.Errorln("No own homeserver password defined")
+	if config.OwnHomeserver.Password == "" && config.OwnHomeserver.AccessToken == "" && config.OwnHomeserver.DeviceID == "" {
+		log.Errorln("No own homeserver password or access token defined")
 		os.Exit(1)
 	}
 
@@ -95,8 +97,8 @@ func ReadConfig() Config {
 			log.Errorf("No remote homeserver username defined for homeserver %s", remoteHomeserver.Homeserver)
 			os.Exit(1)
 		}
-		if remoteHomeserver.Password == "" {
-			log.Errorf("No remote homeserver password defined for homeserver %s", remoteHomeserver.Homeserver)
+		if remoteHomeserver.AccessToken == "" && remoteHomeserver.DeviceID == "" && remoteHomeserver.Password == "" {
+			log.Errorf("No remote homeserver password or access token defined for homeserver %s", remoteHomeserver.Homeserver)
 			os.Exit(1)
 		}
 	}

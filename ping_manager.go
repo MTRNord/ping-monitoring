@@ -16,14 +16,14 @@ import (
 type PingCollector struct {
 	Config        *Config
 	Metrics       map[string]*prometheus.Desc
-	LastCollected time.Time
+	LastCollected map[string]time.Time
 	Failures      map[string]int
 }
 
 func (c *PingCollector) Describe(ch chan<- *prometheus.Desc) {
-	mean := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "mean"), "Mean ping time", []string{"homeserver"}, nil)
-	median := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "median"), "Median ping time", []string{"homeserver"}, nil)
-	gmean := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "gmean"), "GMean ping time", []string{"homeserver"}, nil)
+	mean := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "mean"), "Mean ping time", []string{"homeserver", "origin", "direction"}, nil)
+	median := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "median"), "Median ping time", []string{"homeserver", "origin", "direction"}, nil)
+	gmean := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "gmean"), "GMean ping time", []string{"homeserver", "origin", "direction"}, nil)
 	failures := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "failures"), "Ping failures", []string{"origin", "direction"}, nil)
 	c.Metrics = make(map[string]*prometheus.Desc)
 	c.Metrics["mean"] = mean
@@ -61,10 +61,14 @@ func (c *PingCollector) Collect(ch chan<- prometheus.Metric) {
 // It takes a homeserver config as an argument to know where to send the ping
 func (c *PingCollector) SendPing(ctx context.Context, client *mautrix.Client, ch chan<- prometheus.Metric, wg *sync.WaitGroup) {
 	defer wg.Done()
-	if c.LastCollected.Add(time.Duration(c.Config.PingRateSeconds) * time.Second).After(time.Now()) {
+	if c.LastCollected[client.UserID.Homeserver()].Add(time.Duration(c.Config.PingRateSeconds) * time.Second).After(time.Now()) {
 		log.Infof("Not sending ping as we sent one less than %d seconds ago", c.Config.PingRateSeconds)
 		return
 	}
+	if c.LastCollected == nil {
+		c.LastCollected = make(map[string]time.Time)
+	}
+	c.LastCollected[client.UserID.Homeserver()] = time.Now()
 	log.Infof("Sending ping as %s", client.UserID)
 	if c.Config.PingRoomID == "" {
 		log.Errorf("No ping room ID found")
@@ -82,9 +86,15 @@ func (c *PingCollector) SendPing(ctx context.Context, client *mautrix.Client, ch
 	// Otherwise timeout after PingThresholdSeconds
 	var currentData Data
 	var gotKnownPong bool = false
+	var pingTime time.Time = time.Now()
+	u, err := url.Parse(c.Config.OwnHomeserver.Homeserver)
+	if err != nil {
+		log.Errorf("Failed to parse homeserver url: %s", err)
+		return
+	}
 
 outer:
-	for time.Now().Before(c.LastCollected.Add(time.Duration(c.Config.PingThresholdSeconds) * time.Second)) {
+	for time.Now().Before(pingTime.Add(time.Duration(c.Config.PingThresholdSeconds) * time.Second)) {
 		resp, err := http.Get(c.Config.PingJsonURL)
 		if err != nil {
 			log.Errorf("Failed to get ping json: %s", err)
@@ -97,12 +107,13 @@ outer:
 		json.NewDecoder(resp.Body).Decode(&currentData)
 
 		// Check if we have a pong for this ping
-		if ping, ok := currentData.Pings[client.HomeserverURL.Host]; ok {
+		log.Infof("Checking for pong for ping as %s", client.UserID.Homeserver())
+		if ping, ok := currentData.Pings[client.UserID.Homeserver()]; ok {
 			log.Infof("Got pong for ping as %s", client.UserID)
 
 			// Check if its from a known remote homeserver in ping.Pongs
 			for homeserver := range ping.Pongs {
-				if homeserver == client.HomeserverURL.Host {
+				if homeserver == client.UserID.Homeserver() {
 					continue
 				}
 				if _, ok := currentData.Pings[homeserver]; ok {
@@ -126,27 +137,28 @@ outer:
 		if c.Failures == nil {
 			c.Failures = make(map[string]int)
 		}
-		u, err := url.Parse(c.Config.OwnHomeserver.Homeserver)
-		if err != nil {
-			log.Errorf("Failed to parse homeserver url: %s", err)
-			return
-		}
 
 		if client.HomeserverURL.Host == u.Host {
 			c.Failures["outgoing"]++
-			ch <- prometheus.MustNewConstMetric(c.Metrics["failures"], prometheus.CounterValue, float64(c.Failures["outgoing"]), client.HomeserverURL.Host, "outgoing")
+			ch <- prometheus.MustNewConstMetric(c.Metrics["failures"], prometheus.CounterValue, float64(c.Failures["outgoing"]), client.UserID.Homeserver(), "outgoing")
 		} else {
 			c.Failures["incoming"]++
-			ch <- prometheus.MustNewConstMetric(c.Metrics["failures"], prometheus.CounterValue, float64(c.Failures["incoming"]), client.HomeserverURL.Host, "incoming")
+			ch <- prometheus.MustNewConstMetric(c.Metrics["failures"], prometheus.CounterValue, float64(c.Failures["incoming"]), client.UserID.Homeserver(), "incoming")
 		}
 	}
 
 	// Update mean, median and gmean metrics
 	// All of these are per homeserver we received a pong from
-	// They are all of type histogram
-	for homeserver, ping := range currentData.Pings[client.HomeserverURL.Host].Pongs {
-		ch <- prometheus.MustNewConstMetric(c.Metrics["mean"], prometheus.GaugeValue, ping.Mean, homeserver)
-		ch <- prometheus.MustNewConstMetric(c.Metrics["median"], prometheus.GaugeValue, ping.Median, homeserver)
-		ch <- prometheus.MustNewConstMetric(c.Metrics["gmean"], prometheus.GaugeValue, ping.GMean, homeserver)
+	// They are all of type Gauge (Should they be a historgram?)
+	for homeserver, ping := range currentData.Pings[client.UserID.Homeserver()].Pongs {
+		if client.HomeserverURL.Host == u.Host {
+			ch <- prometheus.MustNewConstMetric(c.Metrics["mean"], prometheus.GaugeValue, ping.Mean, homeserver, client.UserID.Homeserver(), "outgoing")
+			ch <- prometheus.MustNewConstMetric(c.Metrics["median"], prometheus.GaugeValue, ping.Median, homeserver, client.UserID.Homeserver(), "outgoing")
+			ch <- prometheus.MustNewConstMetric(c.Metrics["gmean"], prometheus.GaugeValue, ping.GMean, homeserver, client.UserID.Homeserver(), "outgoing")
+		} else {
+			ch <- prometheus.MustNewConstMetric(c.Metrics["mean"], prometheus.GaugeValue, ping.Mean, homeserver, client.UserID.Homeserver(), "incoming")
+			ch <- prometheus.MustNewConstMetric(c.Metrics["median"], prometheus.GaugeValue, ping.Median, homeserver, client.UserID.Homeserver(), "incoming")
+			ch <- prometheus.MustNewConstMetric(c.Metrics["gmean"], prometheus.GaugeValue, ping.GMean, homeserver, client.UserID.Homeserver(), "incoming")
+		}
 	}
 }

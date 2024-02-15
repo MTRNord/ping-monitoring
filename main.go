@@ -72,18 +72,28 @@ func createMatrixClient(config *Config, homeserver *MatrixConfig) *mautrix.Clien
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	loginresp, err := client.Login(ctx, &mautrix.ReqLogin{
-		Type:               mautrix.AuthTypePassword,
-		Identifier:         mautrix.UserIdentifier{Type: "m.id.user", User: homeserver.Username},
-		Password:           homeserver.Password,
-		StoreCredentials:   true,
-		StoreHomeserverURL: true,
-	})
-	if err != nil {
-		log.Errorf("Failed to login to %s: %s", homeserver.Homeserver, err)
-		os.Exit(1)
+	if homeserver.AccessToken == "" {
+		loginresp, err := client.Login(ctx, &mautrix.ReqLogin{
+			Type:               mautrix.AuthTypePassword,
+			Identifier:         mautrix.UserIdentifier{Type: "m.id.user", User: homeserver.Username},
+			Password:           homeserver.Password,
+			StoreCredentials:   true,
+			StoreHomeserverURL: true,
+		})
+		if err != nil {
+			log.Errorf("Failed to login to %s: %s", homeserver.Homeserver, err)
+			os.Exit(1)
+		}
+		log.Infof("Logged in as %s", loginresp.UserID)
+
+		// Tell user to store the access token and device id and remove the password from the config
+		log.Warnf("Please store the access token and device id for %s and remove the password from the config", homeserver.Homeserver)
+		log.Warnf("Access token: %s", loginresp.AccessToken)
+		log.Warnf("Device ID: %s", loginresp.DeviceID)
+	} else {
+		client.AccessToken = homeserver.AccessToken
+		client.DeviceID = id.DeviceID(homeserver.DeviceID)
 	}
-	log.Infof("Logged in as %s", loginresp.UserID)
 
 	// join the ping room
 	resp, err := client.JoinRoom(ctx, config.PingRoom, "", nil)
@@ -108,7 +118,7 @@ func createMatrixClient(config *Config, homeserver *MatrixConfig) *mautrix.Clien
 		}
 
 		if evt.Content.AsMessage().Body == "!ping" {
-			log.Infoln("Received ping message in pingroom by ", evt.Sender)
+			log.Infoln("Received ping message in pingroom by", evt.Sender)
 			// Respond to the ping
 			pong_event_content := PongEventContent{
 				MsgType: "m.notice",
