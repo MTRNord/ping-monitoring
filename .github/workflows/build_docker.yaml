@@ -37,12 +37,18 @@ jobs:
         run: |
           echo ::set-output name=VERSION::$(git describe --tags --abbrev=0)
           echo ::set-output name=BRANCH::$(git rev-parse --abbrev-ref HEAD)
+      - name: Sanitize repo slug
+        uses: actions/github-script@v6
+        id: repo_slug
+        with:
+          result-encoding: string
+          script: return '${{ env.REGISTRY }}/${{ github.repository }}'.toLowerCase()
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.repo_slug.outputs.result }}
 
       # Install QEMU to enable cross-platform builds
       - name: Setup QEMU
@@ -62,7 +68,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ steps.repo_slug.outputs.result }},push-by-digest=true,name-canonical=true,push=true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.platform }}
@@ -93,13 +99,19 @@ jobs:
           path: /tmp/digests
           pattern: digests-*
           merge-multiple: true
+      - name: Sanitize repo slug
+        uses: actions/github-script@v6
+        id: repo_slug
+        with:
+          result-encoding: string
+          script: return '${{ env.REGISTRY }}/${{ github.repository }}'.toLowerCase()
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.repo_slug.outputs.result }}
       - name: Login to the Container registry
         uses: docker/login-action@v3
         with:
@@ -110,7 +122,7 @@ jobs:
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)          
+            $(printf '${{ steps.repo_slug.outputs.result }}@sha256:%s ' *)          
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}          
+          docker buildx imagetools inspect ${{ steps.repo_slug.outputs.result }}:${{ steps.meta.outputs.version }}          
