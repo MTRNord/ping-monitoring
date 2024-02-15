@@ -5,12 +5,15 @@ import (
 
 	"github.com/goccy/go-yaml"
 	log "github.com/sirupsen/logrus"
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/id"
 )
 
 type MatrixConfig struct {
 	Homeserver string `yaml:"homeserver"`
 	Username   string `yaml:"username"`
 	Password   string `yaml:"password"`
+	Client     *mautrix.Client
 }
 
 type Config struct {
@@ -18,10 +21,11 @@ type Config struct {
 	OwnHomeserver          MatrixConfig   `yaml:"own_homeserver"`
 	RemoteHomeservers      []MatrixConfig `yaml:"remote_homeservers"`
 	PingRoom               string         `yaml:"ping_room"`
-	PingRateSeconds        int            `yaml:"ping_rate_seconds"`
-	PingThresholdSeconds   int            `yaml:"ping_threshold_seconds"`
-	PingJsonURL            string         `yaml:"ping_json_url"`
-	BlacklistedHomeservers []string       `yaml:"blacklisted_homeservers"`
+	PingRoomID             id.RoomID
+	PingRateSeconds        int      `yaml:"ping_rate_seconds"`
+	PingThresholdSeconds   int      `yaml:"ping_threshold_seconds"`
+	PingJsonURL            string   `yaml:"ping_json_url"`
+	BlacklistedHomeservers []string `yaml:"blacklisted_homeservers"`
 }
 
 func ReadConfig() Config {
@@ -94,6 +98,30 @@ func ReadConfig() Config {
 		if remoteHomeserver.Password == "" {
 			log.Errorf("No remote homeserver password defined for homeserver %s", remoteHomeserver.Homeserver)
 			os.Exit(1)
+		}
+	}
+
+	// Ensure that the Remote Homeservers are not blacklisted
+	for _, blacklistedHomeserver := range config.BlacklistedHomeservers {
+		for _, remoteHomeserver := range config.RemoteHomeservers {
+			if remoteHomeserver.Homeserver == blacklistedHomeserver {
+				log.Errorf("Remote homeserver %s is blacklisted", remoteHomeserver.Homeserver)
+				os.Exit(1)
+			}
+		}
+	}
+
+	// Ensure that the Remote Homeservers are different from the Own Homeserver or each other
+	for _, remoteHomeserver := range config.RemoteHomeservers {
+		if remoteHomeserver.Homeserver == config.OwnHomeserver.Homeserver {
+			log.Errorf("Remote homeserver %s is the same as the own homeserver", remoteHomeserver.Homeserver)
+			os.Exit(1)
+		}
+		for _, remoteHomeserver2 := range config.RemoteHomeservers {
+			if remoteHomeserver.Homeserver == remoteHomeserver2.Homeserver {
+				log.Errorf("Remote homeserver %s is the same as remote homeserver %s", remoteHomeserver.Homeserver, remoteHomeserver2.Homeserver)
+				os.Exit(1)
+			}
 		}
 	}
 
