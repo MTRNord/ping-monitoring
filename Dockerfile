@@ -6,8 +6,12 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY *.go ./
-
-RUN CGO_ENABLED=0 GOOS=linux go build -o /ping-monitoring
+# Build the Go binary with version information
+ARG VERSION
+ARG BRANCH
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/prometheus/common/version.Version=${VERSION} -X github.com/prometheus/common/version.Branch=${BRANCH}" \
+    -o /ping-monitoring
 
 FROM gcr.io/distroless/base-debian12
 
