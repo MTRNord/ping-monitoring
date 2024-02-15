@@ -15,16 +15,19 @@ type PingCollector struct {
 	Config        Config
 	Metrics       map[string]*prometheus.Desc
 	LastCollected time.Time
+	Failures      map[string]int
 }
 
 func (c *PingCollector) Describe(ch chan<- *prometheus.Desc) {
 	mean := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "mean"), "Mean ping time", []string{"homeserver"}, nil)
 	median := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "median"), "Median ping time", []string{"homeserver"}, nil)
 	gmean := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "gmean"), "GMean ping time", []string{"homeserver"}, nil)
+	failures := prometheus.NewDesc(prometheus.BuildFQName(collector, "", "failures"), "Ping failures", []string{"origin", "direction"}, nil)
 	c.Metrics = make(map[string]*prometheus.Desc)
 	c.Metrics["mean"] = mean
 	c.Metrics["median"] = median
 	c.Metrics["gmean"] = gmean
+	c.Metrics["failures"] = failures
 	log.Infof("Registered metrics")
 }
 
@@ -95,6 +98,13 @@ outer:
 	// If we have not received a pong for this ping, we should log it
 	if !gotKnownPong {
 		log.Errorf("Failed to get pong for ping as %s", client.UserID)
+		if client.HomeserverURL.Host == c.Config.OwnHomeserver.Homeserver {
+			c.Failures["outgoing"]++
+			ch <- prometheus.MustNewConstMetric(c.Metrics["failures"], prometheus.CounterValue, float64(c.Failures["outgoing"]), client.HomeserverURL.Host, "outgoing")
+		} else {
+			c.Failures["incoming"]++
+			ch <- prometheus.MustNewConstMetric(c.Metrics["failures"], prometheus.CounterValue, float64(c.Failures["incoming"]), client.HomeserverURL.Host, "incoming")
+		}
 	}
 
 	// Update mean, median and gmean metrics
